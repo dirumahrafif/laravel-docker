@@ -1,0 +1,84 @@
+name: Deploy Laravel to VPS
+
+on:
+  push:
+    branches:
+      - '*'
+
+jobs:
+  deploy:
+    name: CI/CD to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            REPO="https://${{ secrets.GIT_TOKEN }}@github.com/dirumahrafif/laravel-docker.git"
+            DIR="${{ secrets.VPS_PATH }}"
+            CONTAINER="laravel_app"
+            BRANCH="deploy-github"
+            echo "Cek git"
+            if ! command -v git &>/dev/null; then
+              echo "Install git..."
+              sudo apt-get update && sudo apt-get install -y git
+            fi
+            echo "Cek docker"
+            if ! command -v docker &>/dev/null; then
+              echo "Install docker..."
+              curl -fsSL https://get.docker.com | sh
+              sudo usermod -aG docker $USER
+            fi
+            echo "Cek docker compose"
+            if ! docker compose version &>/dev/null; then
+              echo "Install docker compose plugin..."
+              mkdir -p ~/.docker/cli-plugins
+              curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+                -o ~/.docker/cli-plugins/docker-compose
+              chmod +x ~/.docker/cli-plugins/docker-compose
+            fi
+            echo "Clone atau pull repo"
+            if [ ! -d "$DIR/.git" ]; then
+              echo "Clone repo..."
+              git clone --branch $BRANCH $REPO $DIR
+            else
+              echo "Pull update..."
+              cd $DIR
+              git reset --hard HEAD
+              git pull origin $BRANCH
+            fi
+            echo "Menyimpan .env untuk Laravel"
+            echo "${{ secrets.LARAVEL_ENV }}" > ${{ secrets.VPS_PATH }}/${{ secrets.LARAVEL_DIR }}/.env
+            
+            echo "Menyiapkan environment variables untuk Docker Compose"
+            echo "APP_PORT=${{ secrets.APP_PORT }}" >> "$DIR/.env.deploy"
+            echo "DB_ROOT_PASSWORD=${{ secrets.DB_ROOT_PASSWORD }}" >> "$DIR/.env.deploy"
+            echo "DB_HOST=${{ secrets.DB_HOST }}" >> "$DIR/.env.deploy"
+            echo "DB_NAME=${{ secrets.DB_NAME }}" >> "$DIR/.env.deploy"
+            echo "DB_USERNAME=${{ secrets.DB_USERNAME }}" >> "$DIR/.env.deploy"
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> "$DIR/.env.deploy"
+            echo "Masuk direktori $DIR";
+            cd $DIR
+            echo "Restart Docker Compose"
+            docker compose down
+            docker compose --env-file .env.deploy up -d --build
+            echo "Menunggu Laravel siap..."
+            until docker exec $CONTAINER php artisan --version > /dev/null 2>&1; do
+              echo "Menunggu Laravel container..."
+              docker container start $CONTAINER
+              sleep 2
+            done
+            echo "Laravel siap!"
+            echo "composer install"
+            docker exec $CONTAINER composer install --optimize-autoloader --no-dev
+            echo "buat key"
+            docker exec $CONTAINER php artisan key:generate
+            echo "artisan migrate"
+            docker exec $CONTAINER php artisan migrate --force
