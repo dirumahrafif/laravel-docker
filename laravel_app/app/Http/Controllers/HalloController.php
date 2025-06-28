@@ -9,6 +9,6 @@ class HalloController extends Controller
     //
     public function index()
     {
-        echo "<h1>Halo dari Laravel Docker</h1>";
+        echo "<h1>Halo dari Laravel Docker Versi 2</h1>";
     }
 }
